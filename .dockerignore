@@ -1,0 +1,40 @@
+# 忽略 Git 历史
+.git
+.gitignore
+
+# 忽略编辑器配置
+.idea/
+.vscode/
+*.code-workspace
+
+# 忽略虚拟环境
+.venv/
+venv/
+env/
+ENV/
+
+# 忽略 Python 缓存文件
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 忽略测试文件（如果有）
+tests/
+test.py
+
+# 忽略日志文件
+*.log
+
+# 忽略本地环境文件
+.env
+*.env
+
+# 忽略操作系统临时文件
+.DS_Store
+Thumbs.db
+
+# 忽略构建产物
+build/
+dist/
+downloads/

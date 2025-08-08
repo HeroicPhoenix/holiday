@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <title>中国节假日查询 · holiday-cn</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- 轻量美化：Pico.css CDN -->
+  <link rel="stylesheet" href="https://unpkg.com/@picocss/pico@2/css/pico.min.css">
+  <style>
+    .result-badge { padding: .25rem .5rem; border-radius: .5rem; font-weight: 600; }
+    .badge-work { background: #e7f5ff; }
+    .badge-weekend { background: #e6fcf5; }
+    .badge-holiday { background: #fff4e6; }
+    .badge-overtime { background: #f8f0fc; }
+    .muted { color: #6c757d; }
+    .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .75rem; }
+    @media (min-width: 992px) { .grid { grid-template-columns: repeat(4, 1fr); } }
+    .jsonbox { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: .9rem; }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <hgroup>
+      <h1>中国节假日查询</h1>
+      <p class="muted">数据来源：<code>NateScarlet/holiday-cn</code> · 后端 FastAPI · 每日自动更新</p>
+    </hgroup>
+
+    <article>
+      <form id="query-form" onsubmit="event.preventDefault(); query();">
+        <div class="grid">
+          <div>
+            <label for="date">选择日期</label>
+            <input type="date" id="date" name="date" required />
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button type="submit">查询</button>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button type="button" class="secondary" onclick="setToday()">今天</button>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button type="button" class="secondary" onclick="setTomorrow()">明天</button>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button type="button" class="secondary" onclick="setWeekend()">本周末</button>
+          </div>
+          <div>
+            <label>&nbsp;</label>
+            <button type="button" class="secondary" onclick="health()">检查后端</button>
+          </div>
+        </div>
+      </form>
+    </article>
+
+    <article id="result-card" style="display:none;">
+      <header>
+        <strong id="r-date"></strong>
+        <span id="r-weekday" class="muted" style="margin-left:.5rem;"></span>
+      </header>
+      <p>
+        <span id="r-type" class="result-badge"></span>
+      </p>
+      <div class="grid">
+        <div>
+          <small class="muted">是否休息</small>
+          <h4 id="r-isoff"></h4>
+        </div>
+        <div>
+          <small class="muted">节日名称</small>
+          <h4 id="r-festival"></h4>
+        </div>
+        <div>
+          <small class="muted">原始标注</small>
+          <h4 id="r-raw"></h4>
+        </div>
+        <div>
+          <small class="muted">年份</small>
+          <h4 id="r-year"></h4>
+        </div>
+      </div>
+      <details>
+        <summary>查看原始 JSON</summary>
+        <pre class="jsonbox" id="raw-json"></pre>
+        <button class="secondary" onclick="copyJSON()">复制 JSON</button>
+      </details>
+    </article>
+
+    <article id="msg-card" style="display:none;">
+      <p id="msg-text"></p>
+    </article>
+
+    <footer class="muted" style="margin-top:2rem;">
+      <small>© holiday-cn 查询示例 · 接口：<code>/query</code>、<code>/api/query</code></small>
+    </footer>
+  </main>
+
+  <script>
+    const el = (id) => document.getElementById(id);
+    function formatDate(d) { return d.toISOString().slice(0,10); }
+
+    function setToday() {
+      const d = new Date();
+      el('date').value = formatDate(d);
+      query();
+    }
+    function setTomorrow() {
+      const d = new Date(); d.setDate(d.getDate()+1);
+      el('date').value = formatDate(d);
+      query();
+    }
+    function setWeekend() {
+      const d = new Date();
+      const day = d.getDay(); // Sun=0..Sat=6
+      const offset = day === 0 ? 6 : 6 - day;
+      d.setDate(d.getDate() + offset);
+      el('date').value = formatDate(d);
+      query();
+    }
+
+    function health() {
+      fetch('/health').then(r=>r.json()).then(j=>{
+        showMsg(j.ok ? '后端正常运行。' : '后端未就绪。');
+      }).catch(()=> showMsg('无法连接后端。'));
+    }
+
+    function showMsg(text) {
+      el('msg-text').textContent = text;
+      el('msg-card').style.display = 'block';
+      setTimeout(()=> el('msg-card').style.display = 'none', 3000);
+    }
+
+    function badgeClass(type) {
+      if (type.includes('工作日')) return 'badge-work';
+      if (type.includes('周末')) return 'badge-weekend';
+      if (type.includes('法定')) return 'badge-holiday';
+      if (type.includes('补班')) return 'badge-overtime';
+      return 'badge-work';
+    }
+
+    function copyJSON() {
+      const t = el('raw-json').innerText;
+      navigator.clipboard.writeText(t).then(()=> showMsg('已复制 JSON'));
+    }
+
+    async function query() {
+      const date = el('date').value;
+      if (!date) { showMsg('请选择日期'); return; }
+      try {
+        const res = await fetch(`/query?date=${encodeURIComponent(date)}`);
+        const j = await res.json();
+        if (!res.ok) {
+          showMsg(j.error || '查询失败');
+          el('result-card').style.display = 'none';
+          return;
+        }
+        el('r-date').textContent = j.date;
+        el('r-weekday').textContent = j.weekday;
+        el('r-type').textContent = j.type;
+        el('r-type').className = 'result-badge ' + badgeClass(j.type);
+        el('r-isoff').textContent = j.is_off_day ? '是' : '否';
+        el('r-festival').textContent = j.festival || '无';
+        el('r-raw').textContent = j.raw_name || '—';
+        el('r-year').textContent = j.year;
+        el('raw-json').textContent = JSON.stringify(j, null, 2);
+        el('result-card').style.display = 'block';
+      } catch (e) {
+        showMsg('请求异常：' + e);
+        el('result-card').style.display = 'none';
+      }
+    }
+
+    window.addEventListener('DOMContentLoaded', setToday);
+  </script>
+</body>
+</html>
