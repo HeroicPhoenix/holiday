@@ -19,7 +19,7 @@ services:
     # —— 持久化 —— 把 NAS 路径挂到容器内部路径
     volumes:
       # 假日 JSON 数据持久化目录（建议先在群晖建好这两个文件夹）
-      - /volume1/docker/holiday/holidays:/data/holidays
+      - /volume1/docker/holiday/holidays:/holidays/holidays
 
     # 在容器里以前台方式启动 uvicorn
     command: >
