@@ -2,13 +2,7 @@ version: "3.9"
 
 services:
   holiday-api:
-    # 若你本地有 Dockerfile 就用 build；若已有镜像就把下面两行改为：image: your-repo/holiday-api:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
-
     container_name: holiday-api
-    restart: unless-stopped
 
     # 宿主机:容器端口（uvicorn在容器内跑12081）
     ports:
