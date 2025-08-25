@@ -16,5 +16,8 @@ RUN pip install --no-cache-dir -r requirements.txt \
 # 暴露端口
 EXPOSE 12081
 
-# 启动命令
-CMD ["python", "app.py"]
+# 声明数据卷（实际持久化由 docker-compose 在宿主机挂载 /volume1/docker/holiday/holidays）
+VOLUME ["/data/holidays"]
+
+# 用 uvicorn 前台启动（与 compose 里一致）
+CMD ["uvicorn","app:app","--host","0.0.0.0","--port","12081"]
