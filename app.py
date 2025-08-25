@@ -24,7 +24,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 
 # ===================== 环境变量配置 =====================
-FOLDER_PATH = os.environ.get("HOLIDAY_JSON_PATH", "data/holidays")
+FOLDER_PATH = os.environ.get("HOLIDAY_JSON_PATH", "/data/holidays")
 GH_OWNER = os.environ.get("HOLIDAY_GH_OWNER", "NateScarlet")
 GH_REPO = os.environ.get("HOLIDAY_GH_REPO", "holiday-cn")
 GH_PATH = os.environ.get("HOLIDAY_GH_PATH", "").strip("/")  # 仓库根目录留空
