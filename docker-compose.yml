@@ -1,0 +1,34 @@
+version: "3.9"
+
+services:
+  holiday-api:
+    # 若你本地有 Dockerfile 就用 build；若已有镜像就把下面两行改为：image: your-repo/holiday-api:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+
+    container_name: holiday-api
+    restart: unless-stopped
+
+    # 宿主机:容器端口（uvicorn在容器内跑12081）
+    ports:
+      - "12081:12081"
+
+    # —— 环境变量（与你代码中的 os.environ 一一对应）——
+    environment:
+      # 假日 JSON 本地落盘目录（容器内路径）
+      HOLIDAY_JSON_PATH: "/data/holidays"
+
+      # （可选）提高 GitHub API 配额：把 token 放到群晖“环境变量”里命名为 GITHUB_TOKEN 即可
+      # GITHUB_TOKEN: "${GITHUB_TOKEN}"
+
+    # —— 持久化 —— 把 NAS 路径挂到容器内部路径
+    volumes:
+      # 假日 JSON 数据持久化目录（建议先在群晖建好这两个文件夹）
+      - /volume1/docker/holiday/holidays:/data/holidays
+
+    # 在容器里以前台方式启动 uvicorn
+    command: >
+      uvicorn app:app
+      --host 0.0.0.0
+      --port 12081
