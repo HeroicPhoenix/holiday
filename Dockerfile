@@ -4,13 +4,15 @@ FROM crpi-v2fmzydhnzmlpzjc.cn-shanghai.personal.cr.aliyuncs.com/machenkai/python
 # 设置工作目录
 WORKDIR /app
 
-# 拷贝代码到容器
-COPY app /app
+COPY requirements.txt /app/requirements.txt
 
 # 安装依赖（使用阿里云镜像源加速）
 RUN pip install --no-cache-dir -r requirements.txt \
     -i https://mirrors.aliyun.com/pypi/simple/ \
-    && rm -rf /root/.cache/pip \
+    && rm -rf /root/.cache/pip
+
+# 拷贝代码到容器
+COPY app /app
 
 # 数据卷（让 /data 可挂载）
 VOLUME ["/data"]
