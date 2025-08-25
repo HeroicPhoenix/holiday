@@ -5,7 +5,7 @@ FROM crpi-v2fmzydhnzmlpzjc.cn-shanghai.personal.cr.aliyuncs.com/machenkai/python
 WORKDIR /app
 
 # 拷贝代码到容器
-COPY . /app
+COPY app /app
 
 # 安装依赖（使用阿里云镜像源加速）
 RUN pip install --no-cache-dir -r requirements.txt \
