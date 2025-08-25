@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 FastAPI 假日查询服务（自动从 GitHub 拉取 JSON，带每日定时刷新 + 前端页面）
-- 强化：多源回退（GitHub API -> raw.githubusercontent -> jsDelivr），重试、指数退避、按年份枚举兜底
+- 多源回退（GitHub API -> raw.githubusercontent -> jsDelivr），重试、指数退避、按年份枚举兜底
 - 静态站点挂到 /ui（根路径 / 重定向到 /ui/）
+- ★ 数据持久化：优先用 HOLIDAY_JSON_PATH，其次使用 <项目根>/data/holidays
 """
-
 
 import os
 import re
@@ -14,8 +14,9 @@ import threading
 import requests
 import pandas as pd
 from datetime import datetime, timedelta
-from typing import List, Dict, Any, Optional, Iterable
+from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -23,19 +24,30 @@ from fastapi.staticfiles import StaticFiles
 from apscheduler.schedulers.background import BackgroundScheduler
 from pydantic import BaseModel
 
-# ===================== 环境变量配置 =====================
-FOLDER_PATH = os.environ.get("HOLIDAY_JSON_PATH", "/data/holidays")
+# ===================== 目录与环境 =====================
+APP_DIR = Path(__file__).resolve().parent                # .../holiday/app
+PROJ_ROOT = APP_DIR.parent                               # .../holiday
+DEFAULT_DATA_DIR = PROJ_ROOT / "data"                    # .../holiday/data
+DEFAULT_HOLIDAYS_DIR = DEFAULT_DATA_DIR / "holidays"     # .../holiday/data/holidays
+STATIC_DIR = APP_DIR / "static"                          # .../holiday/app/static
+
+# 数据目录优先级：环境变量 HOLIDAY_JSON_PATH > 项目根/data/holidays > /data/holidays
+FOLDER_PATH = os.environ.get("HOLIDAY_JSON_PATH") or str(
+    DEFAULT_HOLIDAYS_DIR if DEFAULT_HOLIDAYS_DIR.parent.exists() else Path("/data/holidays")
+)
+
 GH_OWNER = os.environ.get("HOLIDAY_GH_OWNER", "NateScarlet")
 GH_REPO = os.environ.get("HOLIDAY_GH_REPO", "holiday-cn")
-GH_PATH = os.environ.get("HOLIDAY_GH_PATH", "").strip("/")  # 仓库根目录留空
+GH_PATH = os.environ.get("HOLIDAY_GH_PATH", "").strip("/")
 GH_BRANCH = os.environ.get("HOLIDAY_GH_BRANCH", "master")
-GH_TOKEN = os.environ.get("GITHUB_TOKEN")  # 建议配置（提升配额；不能解决网络被墙）
+GH_TOKEN = os.environ.get("GITHUB_TOKEN")
 
-SCHED_TZ = os.environ.get("TZ", "Asia/Shanghai")         # 定时任务时区
-SCHED_HOUR = int(os.environ.get("REFRESH_HOUR", "3"))    # 每日 03:00
+SCHED_TZ = os.environ.get("TZ", "Asia/Shanghai")
+SCHED_HOUR = int(os.environ.get("REFRESH_HOUR", "3"))
 SCHED_MIN = int(os.environ.get("REFRESH_MIN", "0"))
 
-SHA_INDEX_FILE = os.path.join(FOLDER_PATH, ".sha_index.json")
+FOLDER_PATH = str(Path(FOLDER_PATH).resolve())
+SHA_INDEX_FILE = str(Path(FOLDER_PATH) / ".sha_index.json")
 
 # 请求超时（秒）
 LIST_TIMEOUT = 8
@@ -58,18 +70,17 @@ def _gh_headers() -> Dict[str, str]:
     return headers
 
 def _load_sha_index() -> Dict[str, str]:
-    if os.path.exists(SHA_INDEX_FILE):
+    p = Path(SHA_INDEX_FILE)
+    if p.exists():
         try:
-            with open(SHA_INDEX_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
+            return json.loads(p.read_text(encoding="utf-8"))
         except Exception:
             return {}
     return {}
 
 def _save_sha_index(idx: Dict[str, str]) -> None:
-    os.makedirs(FOLDER_PATH, exist_ok=True)
-    with open(SHA_INDEX_FILE, "w", encoding="utf-8") as f:
-        json.dump(idx, f, ensure_ascii=False, indent=2)
+    Path(FOLDER_PATH).mkdir(parents=True, exist_ok=True)
+    Path(SHA_INDEX_FILE).write_text(json.dumps(idx, ensure_ascii=False, indent=2), encoding="utf-8")
 
 def _is_year_json(name: str) -> bool:
     if name.startswith("._"):
@@ -77,26 +88,21 @@ def _is_year_json(name: str) -> bool:
     return re.fullmatch(r"\d{4}\.json", name) is not None
 
 def _year_range_for_fallback() -> List[int]:
-    # 仓库最早是 2007；为保险把“当前年+1”也尝试一下（有些年份提前发布）
     this_year = datetime.now().year
     return list(range(2007, this_year + 2))
 
 def _sleep_backoff(attempt: int) -> None:
-    # 1, 2, 4 秒退避（最多 4s）
     time.sleep(min(2 ** (attempt - 1), 4))
 
 # ===================== 网络获取：带重试与回退 =====================
 def _http_get(url: str, headers: Dict[str, str], timeout: int) -> Optional[requests.Response]:
-    # 最多重试 3 次，指数退避
     for attempt in range(1, 4):
         try:
             r = _session.get(url, headers=headers, timeout=timeout)
             if r.status_code == 200:
                 return r
-            # 404 直接放弃，不再重试
             if r.status_code == 404:
                 return None
-            # 其他状态码重试
             print(f"⚠️ GET {url} -> {r.status_code}（第{attempt}次）")
         except Exception as e:
             print(f"⚠️ GET 异常（第{attempt}次）: {e}")
@@ -104,11 +110,10 @@ def _http_get(url: str, headers: Dict[str, str], timeout: int) -> Optional[reque
     return None
 
 def _download_to(dst_path: str, content: bytes) -> None:
-    os.makedirs(os.path.dirname(dst_path), exist_ok=True)
-    with open(dst_path, "wb") as f:
-        f.write(content)
+    p = Path(dst_path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_bytes(content)
 
-# 1) 通过 GitHub Contents API 列目录（首选）
 def _gh_list_contents() -> Optional[List[Dict[str, Any]]]:
     try:
         base = f"https://api.github.com/repos/{GH_OWNER}/{GH_REPO}/contents"
@@ -122,7 +127,6 @@ def _gh_list_contents() -> Optional[List[Dict[str, Any]]]:
         print(f"⚠️ GitHub 列目录失败：{e}")
         return None
 
-# 2) 通过 Contents API 的 download_url 拉取
 def _try_download_via_download_url(item: Dict[str, Any], sha_index: Dict[str, str], force: bool) -> bool:
     name = item.get("name")
     sha = item.get("sha")
@@ -130,8 +134,8 @@ def _try_download_via_download_url(item: Dict[str, Any], sha_index: Dict[str, st
     if not name or not _is_year_json(name) or not download_url:
         return False
 
-    local_file = os.path.join(FOLDER_PATH, name)
-    need = force or (sha_index.get(name) != sha) or (not os.path.exists(local_file))
+    local_file = str(Path(FOLDER_PATH) / name)
+    need = force or (sha_index.get(name) != sha) or (not Path(local_file).exists())
     if not need:
         return False
 
@@ -144,9 +148,7 @@ def _try_download_via_download_url(item: Dict[str, Any], sha_index: Dict[str, st
     print(f"✅ 通过 API 下载完成：{name}")
     return True
 
-# 3) 不依赖 API 的直链拉取（raw & jsDelivr），用于兜底
 def _try_download_via_direct_urls(year: int) -> bool:
-    # 组装仓库内路径
     inner = f"{GH_PATH}/{year}.json" if GH_PATH else f"{year}.json"
     urls = [
         f"https://raw.githubusercontent.com/{GH_OWNER}/{GH_REPO}/{GH_BRANCH}/{inner}",
@@ -155,7 +157,7 @@ def _try_download_via_direct_urls(year: int) -> bool:
     for u in urls:
         resp = _http_get(u, headers=_gh_headers(), timeout=GET_TIMEOUT)
         if resp:
-            local_file = os.path.join(FOLDER_PATH, f"{year}.json")
+            local_file = str(Path(FOLDER_PATH) / f"{year}.json")
             _download_to(local_file, resp.content)
             print(f"✅ 直链下载完成：{year}.json ← {u}")
             return True
@@ -164,19 +166,12 @@ def _try_download_via_direct_urls(year: int) -> bool:
 
 # ===================== 拉取主流程 =====================
 def fetch_all_year_jsons(force: bool = False) -> bool:
-    """
-    拉取所有 YYYY.json 到本地目录，返回是否有变更（新增/更新）
-    - 优先：GitHub Contents API（更精准、快）
-    - 失败：按年份枚举 + 直链多镜像（raw / jsDelivr）
-    """
     changed = False
     sha_index = _load_sha_index()
 
     items = _gh_list_contents()
     if items:
-        # API 可用：逐个按 item 下载（增量依据 sha）
         for it in items:
-            # 跳过非年份 JSON
             name = it.get("name", "")
             if not _is_year_json(name):
                 continue
@@ -185,16 +180,14 @@ def fetch_all_year_jsons(force: bool = False) -> bool:
         _save_sha_index(sha_index)
         return changed
 
-    # API 列目录失败：按年份枚举 + 直链下载（不使用 sha 增量，只要本地没有就下）
     print("ℹ️ 列目录不可用，切换到按年份直链下载模式…")
     for y in _year_range_for_fallback():
-        local_file = os.path.join(FOLDER_PATH, f"{y}.json")
-        if os.path.exists(local_file) and not force:
+        local_file = Path(FOLDER_PATH) / f"{y}.json"
+        if local_file.exists() and not force:
             continue
         if _try_download_via_direct_urls(y):
             changed = True
 
-    # 直链模式没有 sha，用空表保存，防止旧索引残留
     _save_sha_index(sha_index)
     return changed
 
@@ -203,23 +196,23 @@ def build_dataframe() -> pd.DataFrame:
     holiday_map_local: Dict[str, Dict[str, Any]] = {}
     years_local: List[int] = []
 
-    if not os.path.isdir(FOLDER_PATH):
+    folder = Path(FOLDER_PATH)
+    if not folder.is_dir():
         raise RuntimeError(f"本地目录不存在：{FOLDER_PATH}")
 
-    for filename in os.listdir(FOLDER_PATH):
-        if not filename.endswith(".json") or not filename[:4].isdigit() or filename.startswith("._"):
+    for p in folder.iterdir():
+        name = p.name
+        if not name.endswith(".json") or not name[:4].isdigit() or name.startswith("._"):
             continue
-        filepath = os.path.join(FOLDER_PATH, filename)
         try:
-            with open(filepath, "r", encoding="utf-8") as f:
-                data = json.load(f) or {}
+            data = json.loads(p.read_text(encoding="utf-8")) or {}
         except Exception as e:
-            print(f"⚠️ 读取失败：{filename}，原因：{e}")
+            print(f"⚠️ 读取失败：{name}，原因：{e}")
             continue
         days = data.get("days", [])
         if not days:
             continue
-        year = int(filename[:4])
+        year = int(name[:4])
         years_local.append(year)
         for day in days:
             date_str = day.get("date")
@@ -280,18 +273,12 @@ def build_dataframe() -> pd.DataFrame:
     if not df_local.empty:
         df_local.set_index("date", inplace=True)
     else:
-        # 返回空表但保持列结构，避免后续访问报错
         df_local = pd.DataFrame(columns=["raw_name","is_off_day","weekday","type","festival","year"])
         df_local.index.name = "date"
     return df_local
 
-# ===================== 业务方法（后端可直接调用） =====================
+# ===================== 业务方法 =====================
 def get_holiday_info(date_str: str) -> Dict[str, Any]:
-    """
-    后端内部直接调用：
-        from app import get_holiday_info
-        info = get_holiday_info("2025-10-01")
-    """
     with _df_lock:
         if df is None or df.empty:
             raise RuntimeError("数据未初始化或为空")
@@ -329,13 +316,10 @@ def scheduled_refresh():
         print(f"❌ 定时刷新失败：{e}")
 
 def _init_data() -> None:
-    os.makedirs(FOLDER_PATH, exist_ok=True)
+    Path(FOLDER_PATH).mkdir(parents=True, exist_ok=True)
     try:
         changed = fetch_all_year_jsons(force=False)
-        if changed:
-            print("✅ JSON 已更新/新增。")
-        else:
-            print("ℹ️ 使用本地缓存或无变化。")
+        print("✅ JSON 已更新/新增。" if changed else "ℹ️ 使用本地缓存或无变化。")
     except Exception as e:
         print(f"❌ 拉取 JSON 失败（将仅使用本地已有文件）：{e}")
 
@@ -349,7 +333,7 @@ def _init_data() -> None:
     else:
         print(f"✅ 数据就绪，覆盖年份：{df['year'].min()} ~ {df['year'].max()}")
 
-# ===================== Lifespan（无 on_event 警告） =====================
+# ===================== Lifespan =====================
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _init_data()
@@ -361,16 +345,18 @@ async def lifespan(app: FastAPI):
     finally:
         scheduler.shutdown()
 
-# ===================== 创建应用 & 路由 =====================
+# ===================== 应用 & 路由 =====================
 app = FastAPI(lifespan=lifespan)
 
-# 静态目录（含前端页面），挂到 /ui，根路径 / 重定向到 /ui/
-if os.path.isdir("static"):
-    app.mount("/ui", StaticFiles(directory="static", html=True), name="static")
+# 静态目录挂到 /ui，根路径 / 重定向到 /ui/
+if STATIC_DIR.is_dir():
+    app.mount("/ui", StaticFiles(directory=str(STATIC_DIR), html=True), name="static")
 
     @app.get("/")
     def index():
         return RedirectResponse(url="/ui/")
+else:
+    print(f"⚠️ 静态目录未找到：{STATIC_DIR}")
 
 class QueryBody(BaseModel):
     date: str
@@ -379,7 +365,7 @@ class QueryBody(BaseModel):
 def health():
     with _df_lock:
         ready = (df is not None) and (not df.empty)
-    return {"ok": ready}
+    return {"ok": ready, "data_dir": FOLDER_PATH}
 
 @app.get("/refresh")
 def refresh(force: bool = Query(False, description="是否强制重新下载所有 JSON（忽略 sha）")):
