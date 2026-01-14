@@ -1,0 +1,11 @@
+services:
+  path-scanner:
+    image: crpi-v2fmzydhnzmlpzjc.cn-shanghai.personal.cr.aliyuncs.com/machenkai/holiday:latest
+    container_name: holiday
+    ports:
+      - "12081:12081"
+    environment:
+      GITHUB_TOKEN: XXXX
+    volumes:
+      - /volume1/docker/holiday/data:/data
+    restart: always
