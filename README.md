@@ -96,6 +96,32 @@ python-dateutil
 pytz
 ```
 
+## 页脚备案配置
+
+在 `docker-compose.yml` 的 `environment` 中填写当前网站的实际备案信息：
+
+```yaml
+ICP_FOOTER_VISIBLE: "true"
+ICP_TEXT: "苏ICP备19033715号-2"
+ICP_URL: "https://beian.miit.gov.cn/"
+PSB_FOOTER_VISIBLE: "true"
+PSB_TEXT: "苏公网安备32010202010613号"
+PSB_URL: "https://beian.mps.gov.cn/#/query/webSearch"
+```
+
+两项独立显示；文字留空或对应开关设为 `"false"` 时隐藏该项，公安备案的小警徽也一起隐藏。点击备案文字或小警徽会在新窗口打开对应 HTTPS 查询链接；不安全或无效的链接仅展示文字。号码按普通文本显示，不作为 HTML 执行。
+
+备案行沿用页面字体和浅色/深色主题的弱化文字颜色，小字号、自然换行，不悬浮遮挡查询内容。警徽图片随网站打包，来源见 [图片来源说明](app/static/psb-badge.source.md)。公开接口 `GET /api/site-config` 只返回上述备案设置。
+
+首次启用此功能，需要先用本次源码构建并发布新的 `holiday` 镜像，再在部署机器拉取镜像并重新创建容器：
+
+```bash
+docker compose pull path-scanner
+docker compose up -d --force-recreate path-scanner
+```
+
+后续只修改备案配置，执行第二条命令重新创建容器并刷新页面即可，无需重新构建镜像。单纯 `docker compose restart` 不会应用 Compose 中变更的环境变量。本地运行 Python 服务时，在运行环境中设置同名变量即可。
+
 ## 授权许可
 
 MIT License

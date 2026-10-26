@@ -6,6 +6,14 @@ services:
       - "12081:12081"
     environment:
       GITHUB_TOKEN: XXXX
+      # 备案号按当前网站的实际信息填写；留空时隐藏对应项。
+      ICP_FOOTER_VISIBLE: "true"
+      ICP_TEXT: "苏ICP备19033715号-2"
+      ICP_URL: "https://beian.miit.gov.cn/"
+      PSB_FOOTER_VISIBLE: "true"
+      PSB_TEXT: "苏公网安备32010202010613号"
+      # 点击小警徽或公安备案文字打开此查询页。
+      PSB_URL: "https://beian.mps.gov.cn/#/query/webSearch"
     volumes:
       - /volume1/docker/holiday/data:/data
     restart: always

@@ -17,6 +17,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from contextlib import asynccontextmanager
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Query
 from fastapi.responses import JSONResponse, RedirectResponse
@@ -360,6 +361,38 @@ else:
 
 class QueryBody(BaseModel):
     date: str
+
+def _registration_config(prefix: str, default_url: str) -> Dict[str, Any]:
+    text = os.environ.get(f"{prefix}_TEXT", "").strip()
+    visible = os.environ.get(f"{prefix}_FOOTER_VISIBLE", "true").strip().lower()
+    url = os.environ.get(f"{prefix}_URL", default_url).strip()
+    try:
+        parsed = urlsplit(url)
+        safe_url = (
+            len(url) <= 2048
+            and not any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url)
+            and parsed.scheme == "https"
+            and bool(parsed.hostname)
+            and parsed.username is None
+            and parsed.password is None
+        )
+    except ValueError:
+        safe_url = False
+    return {
+        "visible": visible in {"true", "1"} and bool(text),
+        "text": text,
+        "url": url if safe_url else "",
+    }
+
+@app.get("/api/site-config")
+def site_config():
+    return JSONResponse(
+        content={
+            "icp": _registration_config("ICP", "https://beian.miit.gov.cn/"),
+            "psb": _registration_config("PSB", "https://beian.mps.gov.cn/#/query/webSearch"),
+        },
+        headers={"Cache-Control": "no-store"},
+    )
 
 @app.get("/health")
 def health():
